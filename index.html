@@ -1,75 +1,213 @@
 <!doctype html>
-color: 'rgba(0,0,0,0.2)',
-weight: 0.6,
-opacity: 0.9,
-fillOpacity: 0.9
-});
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Real-Time Earthquake Visualizer</title>
 
+  <!-- Leaflet CSS -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-sA+e2y0k0b8fWmZ1a2x0sC0k2h6v9mQ1Y+qvM0vQ0j0="
+    crossorigin=""
+  />
+  <!-- MarkerCluster CSS -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"
+  />
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"
+  />
 
-// build popup content
-const time = formatTime(props.time);
-const place = props.place || 'Unknown location';
-const urlDetail = props.url || '#';
+  <style>
+    html,body,#map { height:100%; margin:0; padding:0; }
+    body { font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, Arial; }
 
+    .app {
+      display:grid;
+      grid-template-columns: 1fr 340px;
+      height:100vh;
+      gap:12px;
+      padding:12px;
+      box-sizing:border-box;
+      background:linear-gradient(180deg,#0f172a 0%,#071029 100%);
+      color:#e6eef8;
+    }
 
-const popupHtml = `
-<div style="min-width:180px">
-<strong>${place}</strong><br/>
-<div class="small">Mag: ${mag} • Depth: ${depth} km</div>
-<div class="small">Time: ${time}</div>
-<div style="margin-top:6px"><a href="${urlDetail}" target="_blank">More details</a></div>
-</div>
-`;
+    .map-card {
+      border-radius:12px;
+      overflow:hidden;
+      box-shadow:0 6px 20px rgba(2,6,23,0.6);
+      background:rgba(255,255,255,0.05);
+    }
 
+    .sidebar {
+      padding:18px;
+      border-radius:12px;
+      background:rgba(255,255,255,0.05);
+      box-shadow:0 6px 20px rgba(2,6,23,0.6);
+      display:flex;
+      flex-direction:column;
+      gap:12px;
+    }
 
-circle.bindPopup(popupHtml);
+    button {
+      padding:8px 12px;
+      border:none;
+      border-radius:8px;
+      background:#2563eb;
+      color:white;
+      cursor:pointer;
+      font-size:0.9rem;
+    }
 
+    .info { font-size:0.85rem; line-height:1.4; }
+    .stats { margin-top:auto; font-size:0.85rem; opacity:0.8; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="map-card"><div id="map"></div></div>
+    <div class="sidebar">
+      <h2>🌍 Earthquake Visualizer</h2>
+      <div class="info">
+        Displays recent earthquakes from the USGS GeoJSON feed.<br/>
+        Marker size = magnitude, color = depth.<br/>
+        Use the controls below to refresh or toggle heatmap.
+      </div>
+      <button id="refreshBtn">🔄 Refresh Data</button>
+      <button id="toggleHeat">🔥 Toggle Heatmap</button>
+      <div class="stats">
+        Last updated: <span id="lastUpdated">—</span><br/>
+        Earthquake count: <span id="quakeCount">—</span>
+      </div>
+    </div>
+  </div>
 
-// add to marker cluster layer
-markersLayer.addLayer(circle);
+  <!-- Leaflet JS -->
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-o9N1j7kG5tR7T1t54Cye0yuVjN4pZkU9wZkzQ3kZ1jU="
+    crossorigin="">
+  </script>
+  <!-- MarkerCluster -->
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <!-- Heatmap plugin -->
+  <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
 
+  <script>
+    // ---- CONFIG ----
+    const usgsUrl =
+      "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson";
+    const autoRefreshInterval = 60; // seconds
 
-// add a heat point: [lat, lon, intensity]
-heatPts.push([lat, lon, Math.max(0.1, mag / 8)]);
-}
+    let map, markersLayer, heatLayer, autoRefreshTimer;
 
+    const lastEl = document.getElementById('lastUpdated');
+    const countEl = document.getElementById('quakeCount');
 
-// update heat layer
-heatLayer.setLatLngs(heatPts);
+    // Helper: format time
+    function formatTime(ms) {
+      return new Date(ms).toLocaleString();
+    }
 
+    // Initialize map
+    function initMap() {
+      map = L.map('map').setView([20,0], 2);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors'
+      }).addTo(map);
 
-// update UI
-lastEl.textContent = new Date().toLocaleTimeString();
-countEl.textContent = count;
+      markersLayer = L.markerClusterGroup();
+      heatLayer = L.heatLayer([], { radius: 25, blur: 15, maxZoom: 6 });
+      map.addLayer(markersLayer);
+    }
 
+    // Fetch and render data
+    async function fetchAndRender() {
+      try {
+        const resp = await fetch(usgsUrl);
+        const data = await resp.json();
 
-} catch (err) {
-console.error('Fetch error', err);
-lastEl.textContent = 'Error fetching';
-countEl.textContent = '—';
-}
-}
+        markersLayer.clearLayers();
+        const heatPts = [];
+        const features = data.features || [];
+        let count = 0;
 
+        for (const f of features) {
+          const coords = f.geometry.coordinates;
+          const props = f.properties;
+          const lat = coords[1], lon = coords[0], depth = coords[2];
+          const mag = props.mag || 0;
+          if (!lat || !lon) continue;
 
-// Toggle heatmap on/off
-function toggleHeatmap() {
-if (map.hasLayer(heatLayer)) {
-map.removeLayer(heatLayer);
-} else {
-map.addLayer(heatLayer);
-}
-}
+          const color = depth > 300 ? '#ff0000'
+                       : depth > 70 ? '#ff8000'
+                       : '#00ff80';
 
+          const circle = L.circleMarker([lat, lon], {
+            radius: Math.max(3, mag * 2),
+            color: 'rgba(0,0,0,0.2)',
+            weight: 0.6,
+            opacity: 0.9,
+            fillColor: color,
+            fillOpacity: 0.9
+          });
 
-// Start or restart the auto-refresh timer
-function startAutoRefresh() {
-if (autoRefreshTimer) clearInterval(autoRefreshTimer);
-autoRefreshTimer = setInterval(fetchAndRender, autoRefreshInterval * 1000);
-}
+          const time = formatTime(props.time);
+          const place = props.place || 'Unknown location';
+          const urlDetail = props.url || '#';
+          const popupHtml = `
+            <strong>${place}</strong><br/>
+            Mag: ${mag} • Depth: ${depth} km<br/>
+            Time: ${time}<br/>
+            <a href="${urlDetail}" target="_blank">More details</a>
+          `;
+          circle.bindPopup(popupHtml);
+          markersLayer.addLayer(circle);
 
+          heatPts.push([lat, lon, Math.max(0.1, mag/8)]);
+          count++;
+        }
 
-// Wire up UI controls
-function wireUI() {
-document.getElementById('refreshBtn').addEventListener('click', fetchAndRender);
-document.getElementById('toggleHeat').addEventListener('click', () => {
-toggleHeatmap();
+        heatLayer.setLatLngs(heatPts);
+        lastEl.textContent = new Date().toLocaleTimeString();
+        countEl.textContent = count;
+      } catch (err) {
+        console.error('Fetch error', err);
+        lastEl.textContent = 'Error fetching';
+        countEl.textContent = '—';
+      }
+    }
+
+    // Toggle heatmap on/off
+    function toggleHeatmap() {
+      if (map.hasLayer(heatLayer)) {
+        map.removeLayer(heatLayer);
+      } else {
+        map.addLayer(heatLayer);
+      }
+    }
+
+    // Auto refresh
+    function startAutoRefresh() {
+      if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+      autoRefreshTimer = setInterval(fetchAndRender, autoRefreshInterval * 1000);
+    }
+
+    function wireUI() {
+      document.getElementById('refreshBtn').addEventListener('click', fetchAndRender);
+      document.getElementById('toggleHeat').addEventListener('click', toggleHeatmap);
+    }
+
+    // Init
+    initMap();
+    wireUI();
+    fetchAndRender();
+    startAutoRefresh();
+  </script>
+</body>
+</html>
