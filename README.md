@@ -6,7 +6,7 @@ A **production-grade, client-side web application** that visualizes **live earth
 
 ## 📸 Demo
 
-[**▶ Live Demo (GitHub Pages)**](https://fitandfine.github.io/earthquake-visualizer/)
+[**▶ Live Demo (GitHub Pages)**](https://fitandfine.github.io/Earthquake-Visualizer/)
 
 ---
 
