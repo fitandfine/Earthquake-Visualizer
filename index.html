@@ -1,287 +1,120 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Real-Time Earthquake Visualizer — Fixed</title>
-
-  <!-- Leaflet CSS (no integrity attr here to avoid blocking if hashes mismatch) -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
-
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>🌍 Earthquake Visualizer – Production</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
   <style>
-    /* Basic layout */
-    html, body { height:100%; margin:0; padding:0; }
-    body { font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, Arial; }
-
-    /* app grid: map + sidebar */
-    .app {
-      display: grid;
-      grid-template-columns: 1fr 360px;
-      gap: 12px;
-      padding: 12px;
-      height: 100vh;
-      box-sizing: border-box;
-      background: linear-gradient(180deg,#0f172a 0%, #071029 100%);
-      color: #e6eef8;
-    }
-
-    /* map container card */
-    .map-card {
-      border-radius: 12px;
-      overflow: hidden;
-      background: rgba(255,255,255,0.03);
-      box-shadow: 0 6px 20px rgba(2,6,23,0.6);
-      /* important for grid children so #map 100% can work */
-      min-height: 0;
-    }
-
-    /* the actual leaflet container */
-    #map {
-      width: 100%;
-      height: 100%;
-      min-height: 320px; /* ensures visible on small screens */
-    }
-
-    /* sidebar */
-    .sidebar {
-      padding: 18px;
-      border-radius: 12px;
-      background: rgba(255,255,255,0.03);
-      box-shadow: 0 6px 20px rgba(2,6,23,0.6);
-      display:flex;
-      flex-direction:column;
-      gap:12px;
-    }
-
-    button {
-      padding:8px 12px;
-      border-radius:8px;
-      border:0;
-      background:#2563eb;
-      color:white;
-      cursor:pointer;
-      font-weight:600;
-    }
-
-    .btn-ghost {
-      background:transparent;
-      color:#cfe3ff;
-      border:1px solid rgba(255,255,255,0.06);
-    }
-
-    .info { font-size:0.9rem; line-height:1.4; color:#cfe3ff; }
-    .stats { margin-top:auto; font-size:0.9rem; opacity:0.9; color:#bcd3ee; }
-
-    /* error banner */
-    #errorBanner { display:none; background:#4d1111; color:#ffd5d5; padding:8px 12px; border-radius:8px; }
-    @media (max-width:900px) {
-      .app { grid-template-columns: 1fr; }
-    }
+    html,body{height:100%;margin:0}
+    body{font-family:sans-serif;background:#0f172a;color:#e6eef8}
+    .app{display:grid;grid-template-columns:1fr 320px;height:100vh;gap:12px;padding:12px;box-sizing:border-box}
+    #map{width:100%;height:100%;border-radius:12px;box-shadow:0 6px 20px rgba(2,6,23,.6)}
+    .sidebar{padding:16px;background:rgba(255,255,255,.05);border-radius:12px;box-shadow:0 6px 20px rgba(2,6,23,.6);display:flex;flex-direction:column;gap:12px}
+    button{padding:8px 12px;border-radius:8px;border:0;background:#2563eb;color:#fff;cursor:pointer;font-weight:600}
+    button.ghost{background:transparent;border:1px solid rgba(255,255,255,.2)}
+    .stats{margin-top:auto;font-size:.9rem;opacity:.9}
+    @media(max-width:900px){.app{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
-  <div class="app">
-    <div class="map-card">
-      <div id="map"></div>
+<div class="app">
+  <div id="map"></div>
+  <aside class="sidebar">
+    <h2>🌍 Earthquake Visualizer</h2>
+    <p>Recent quakes from USGS. Marker size → magnitude, color → depth.</p>
+    <div style="display:flex;gap:8px">
+      <button id="refresh">🔄 Refresh</button>
+      <button id="toggleHeat" class="ghost">🔥 Show Heatmap</button>
     </div>
+    <div class="stats">
+      Last updated: <span id="lastUpdated">—</span><br/>
+      Earthquakes: <span id="count">—</span>
+    </div>
+  </aside>
+</div>
 
-    <aside class="sidebar">
-      <h2>🌍 Earthquake Visualizer</h2>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+<script>
+(() => {
+  const FEED='https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson';
+  const REFRESH_SECS=60;
+  const lastUpdated=document.getElementById('lastUpdated');
+  const countSpan=document.getElementById('count');
+  const refreshBtn=document.getElementById('refresh');
+  const toggleHeat=document.getElementById('toggleHeat');
 
-      <div id="errorBanner"></div>
+  let map=L.map('map',{preferCanvas:true,minZoom:2,worldCopyJump:true}).setView([20,0],2);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+    attribution:'&copy; OpenStreetMap contributors'
+  }).addTo(map);
 
-      <div class="info">
-        Live earthquakes from USGS (GeoJSON). Marker size = magnitude, color = depth.
-      </div>
+  let cluster=L.markerClusterGroup();
+  let heat=L.heatLayer([], {radius:25,blur:20,maxZoom:6});
+  map.addLayer(cluster);
 
-      <div style="display:flex; gap:8px;">
-        <button id="refreshBtn">🔄 Refresh</button>
-        <button id="toggleHeat" class="btn-ghost">🔥 Show Heatmap</button>
-      </div>
+  function depthColor(d){
+    return d>300?'#8b00ff':d>70?'#ff6b00':d>20?'#ffbf00':'#00d084';
+  }
+  function magRadius(m){return Math.max(4,m*3);}
+  function fmtTime(ms){return new Date(ms).toLocaleString();}
 
-      <div class="stats">
-        Last updated: <span id="lastUpdated">—</span><br/>
-        Earthquake count: <span id="quakeCount">—</span>
-      </div>
-    </aside>
-  </div>
-
-  <!-- Scripts: Leaflet first, then plugins. (No integrity attributes) -->
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
-  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
-
-  <script>
-  (function () {
-    // Quick debug helper to show messages on the page
-    function showError(msg) {
-      const el = document.getElementById('errorBanner');
-      el.style.display = 'block';
-      el.textContent = msg;
-      console.error(msg);
-    }
-
-    // Check that Leaflet loaded
-    if (typeof L === 'undefined') {
-      showError('Leaflet failed to load. Check Network tab for blocked requests (unpkg). Try removing adblock/CSP or serve the file via a local server.');
-      return;
-    }
-
-    // CONFIG
-    const USGS_FEED = 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson';
-    const AUTO_REFRESH_SECONDS = 60;
-
-    // UI refs
-    const lastEl = document.getElementById('lastUpdated');
-    const countEl = document.getElementById('quakeCount');
-    const refreshBtn = document.getElementById('refreshBtn');
-    const toggleHeatBtn = document.getElementById('toggleHeat');
-
-    // State
-    let map, markersLayer, heatLayer, autoTimer = null;
-
-    // Utils
-    function fmtTime(ms) { return ms ? new Date(ms).toLocaleString() : '—'; }
-
-    // Initialize map + layers
-    function initMap() {
-      map = L.map('map', { preferCanvas: true }).setView([20, 0], 2);
-
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap contributors',
-        maxZoom: 18
-      }).addTo(map);
-
-      markersLayer = L.markerClusterGroup();
-      map.addLayer(markersLayer);
-
-      heatLayer = L.heatLayer([], { radius: 25, blur: 20, maxZoom: 6 });
-
-      // Some browsers/containers need invalidateSize to correctly render the map initially
-      setTimeout(() => {
-        try { map.invalidateSize(); }
-        catch(e) { /* ignore */ }
-      }, 200);
-
-      console.log('Map initialized');
-    }
-
-    // Depth -> color helper (smooth-ish)
-    function depthToColor(depth) {
-      if (depth >= 300) return '#8b00ff'; // deep (purple)
-      if (depth >= 70) return '#ff6b00';  // mid (orange)
-      if (depth >= 20) return '#ffbf00';  // shallow-mid (gold)
-      return '#00d084';                   // very shallow (teal)
-    }
-
-    // Magnitude -> radius
-    function magToRadius(mag) {
-      if (!mag || mag <= 0) return 4;
-      return Math.max(4, mag * 3);
-    }
-
-    // Fetch & render
-    async function fetchAndRender() {
-      try {
-        console.log('Fetching', USGS_FEED);
-        lastEl.textContent = 'Fetching…';
-        const r = await fetch(USGS_FEED);
-        if (!r.ok) throw new Error('Network response: ' + r.status);
-        const json = await r.json();
-        const features = Array.isArray(json.features) ? json.features : [];
-        markersLayer.clearLayers();
-        const heatPoints = [];
-        let cnt = 0;
-
-        for (const feat of features) {
-          if (!feat || !feat.geometry) continue;
-          const [lon, lat, depth] = feat.geometry.coordinates;
-          const props = feat.properties || {};
-          const mag = props.mag ?? 0;
-          if (typeof lat !== 'number' || typeof lon !== 'number') continue;
-
-          // style
-          const color = depthToColor(depth);
-          const radius = magToRadius(mag);
-
-          const circle = L.circleMarker([lat, lon], {
-            radius,
-            fillColor: color,
-            color: 'rgba(0,0,0,0.2)',
-            weight: 0.6,
-            opacity: 0.9,
-            fillOpacity: 0.9
-          });
-
-          const popup = `
-            <div style="min-width:180px">
-              <strong>${props.place ?? 'Unknown'}</strong><br/>
-              <small>Mag: ${mag} • Depth: ${depth} km</small><br/>
-              <small>Time: ${fmtTime(props.time)}</small><br/>
-              <a href="${props.url ?? '#'}" target="_blank" rel="noopener">More details</a>
-            </div>
-          `;
-          circle.bindPopup(popup);
-          markersLayer.addLayer(circle);
-
-          heatPoints.push([lat, lon, Math.max(0.05, mag / 8)]);
-          cnt++;
-        }
-
-        heatLayer.setLatLngs(heatPoints);
-
-        lastEl.textContent = new Date().toLocaleTimeString();
-        countEl.textContent = cnt;
-        console.log(`Rendered ${cnt} earthquakes`);
-      } catch (err) {
-        showError('Error fetching earthquake data. See console for details.');
-        console.error(err);
-        lastEl.textContent = 'Error';
-        countEl.textContent = '—';
-      }
-    }
-
-    // UI wiring
-    function wireUI() {
-      refreshBtn.addEventListener('click', () => {
-        fetchAndRender();
-        // quick visual feedback
-        refreshBtn.textContent = '🔄 Refreshing…';
-        setTimeout(() => refreshBtn.textContent = '🔄 Refresh', 900);
+  async function fetchData(){
+    try{
+      lastUpdated.textContent='Fetching…';
+      const res=await fetch(FEED);
+      if(!res.ok)throw new Error(res.statusText);
+      const {features}=await res.json();
+      cluster.clearLayers();
+      let heatPts=[],bounds=[];
+      features.forEach(f=>{
+        const [lon,lat,depth]=f.geometry.coordinates;
+        const m=f.properties.mag??0;
+        if(!lat||!lon)return;
+        const c=L.circleMarker([lat,lon],{
+          radius:magRadius(m),
+          fillColor:depthColor(depth),
+          color:'#000',weight:.3,fillOpacity:.85,opacity:.3
+        }).bindPopup(
+          `<strong>${f.properties.place}</strong><br>
+           Mag: ${m} • Depth: ${depth}km<br>
+           ${fmtTime(f.properties.time)}<br>
+           <a href="${f.properties.url}" target="_blank">More</a>`
+        );
+        cluster.addLayer(c);
+        heatPts.push([lat,lon,Math.min(1,Math.max(0.1,m/8))]);
+        bounds.push([lat,lon]);
       });
-
-      toggleHeatBtn.addEventListener('click', () => {
-        if (!map) return;
-        if (map.hasLayer(heatLayer)) {
-          map.removeLayer(heatLayer);
-          toggleHeatBtn.textContent = '🔥 Show Heatmap';
-          toggleHeatBtn.classList.add('btn-ghost');
-        } else {
-          map.addLayer(heatLayer);
-          toggleHeatBtn.textContent = '🔥 Hide Heatmap';
-          toggleHeatBtn.classList.remove('btn-ghost');
-        }
-      });
-    }
-
-    function startAutoRefresh() {
-      if (autoTimer) clearInterval(autoTimer);
-      autoTimer = setInterval(fetchAndRender, AUTO_REFRESH_SECONDS * 1000);
-    }
-
-    // boot
-    try {
-      initMap();
-      wireUI();
-      fetchAndRender();
-      startAutoRefresh();
-    } catch (e) {
-      showError('Initialization error — check console');
+      heat.setLatLngs(heatPts);
+      countSpan.textContent=features.length;
+      lastUpdated.textContent=new Date().toLocaleTimeString();
+      if(bounds.length) map.fitBounds(bounds,{maxZoom:5,padding:[20,20]});
+    }catch(e){
       console.error(e);
+      lastUpdated.textContent='Error';
     }
-  })();
-  </script>
+  }
+
+  refreshBtn.onclick=()=>fetchData();
+  toggleHeat.onclick=()=>{
+    if(map.hasLayer(heat)){
+      map.removeLayer(heat);
+      toggleHeat.textContent='🔥 Show Heatmap';
+      toggleHeat.classList.add('ghost');
+    }else{
+      map.addLayer(heat);
+      toggleHeat.textContent='🔥 Hide Heatmap';
+      toggleHeat.classList.remove('ghost');
+    }
+  };
+
+  fetchData();
+  setInterval(fetchData,REFRESH_SECS*1000);
+})();
+</script>
 </body>
 </html>
